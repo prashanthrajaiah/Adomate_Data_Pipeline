@@ -1,0 +1,9 @@
+certifi==2019.9.11
+docutils==0.15.2
+lockfile==0.12.2
+luigi==2.8.9
+python-daemon==2.1.2
+python-dateutil==2.8.0
+six==1.12.0
+tornado==5.1.1
+virtualenv==16.0.0
