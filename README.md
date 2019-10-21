@@ -9,19 +9,4 @@ more.
 Run pip install luigi to install the latest stable version from PyPI. Documentation for the latest release is
 hosted on readthedocs.
 
-
-
-
-Aditya Birla Sun Life Tax Relief 96 - 5 
-
-ICICI Prudential Bluechip Fund - 2
-
-L & T Emerging Business Fund - 5
-
-Mirae Asset Emerging Bluechip Fund - 3.5
-
-Parag Parikh Long Term Equity Fund - 3
-
-Principal Emerging Bluechip Fund - 4
-
-Axis MIdcap Fund - 7.5
+Run python setup.py build_ext --inplace to compile Cython code first int the logo detection module.
