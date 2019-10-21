@@ -1,6 +1,5 @@
 """
-   Data Ingestion Layer: Module Taking care of the data ingestion or the data loading part.
-
+   Logo Detection Pipeline: Module taking care of the data pipeline for logo detection for Adomate
 """
 from __future__ import print_function
 import luigi
@@ -11,6 +10,7 @@ import ast
 import subprocess
 import random
 import time
+import pickle
 from argparse import Namespace
 
 import Modules.logo_detection.keras_retinanet.bin
@@ -19,13 +19,18 @@ from Modules.logo_detection.keras_retinanet.utils.anchors import make_shapes_cal
 from Modules.logo_detection.keras_retinanet.utils.config import read_config_file, parse_anchor_parameters
 
 
+"""
+Data Ingestion Layer: Layer taking care of the data ingestion/loading operations for the logo detection
+Modules.
+
+"""
+
 class DataIngestionLogoDetection(luigi.Task):
     """
     Luigi task to create image data generators for logo detection model.
     """
     # Reading Command Line Parameters
     args_list = luigi.Parameter()
-
 
     def create_generators(self, args, preprocess_image=None):
 
@@ -64,6 +69,7 @@ class DataIngestionLogoDetection(luigi.Task):
             raise ValueError('Invalid data type received: {}'.format(args.dataset_type))
         print("Returning both the generated errors")
         return train_generator, validation_generator
+
 
     def parse_args(self, arguments):
         """
@@ -106,14 +112,73 @@ class DataIngestionLogoDetection(luigi.Task):
 
         return parser.parse_args(arguments)
 
-
-    def complete(self):
-        print("The arguement list", self.args_list)
+    def run(self):
         self.args_listv1 = self.args_list.strip('][')
         self.args_listv2 = self.args_listv1.split(',')
         self.args = self.parse_args(self.args_listv2)
-        print("The arguments passed *****:", self.args_listv2)
         self.train_generator, self.validation_generator = self.create_generators(self.args, 'resnet50')
         print("Train Generator Properties :", self.train_generator.__len__())
         print("Test Generator Properties: ", self.validation_generator.__len__())
-        return True
+        print("The type of generators", type(self.train_generator))
+
+        target_file_path = './Results/logo_detection_validation_data_generators.pickle'
+        outFile_validation = open(target_file_path, 'wb')
+        pickle.dump(self.validation_generator, outFile_validation)
+        outFile = open(self.output().path, 'wb')
+        pickle.dump(self.train_generator, outFile)
+
+
+    def output(self):
+        return luigi.LocalTarget('./Results/logo_detection_train_data_generators.pickle')
+
+
+"""
+   Data Preprocessing Layer: Module taking care of the data Preprocessing Operations of the different
+   Modules.
+"""
+
+class DataPreprocessingLogoDetection(luigi.Task):
+    """
+    Luigi Task to handle the preprocessing of Image Detection Model workflow.
+    """
+    args_list_v1 = luigi.Parameter()
+    data_text = "This is a sample file being written"
+    train_pickle_dump_path = './Results/logo_detection_train_data_generators.pickle'
+    validation_pickle_dump_path = './Results/logo_detection_validation_data_generators.pickle'
+
+    def requires(self):
+        return [DataIngestionLogoDetection(args_list = self.args_list_v1)]
+
+    def run(self):
+        pickle_off_train_validator = open(self.train_pickle_dump_path,"rb")
+        train_genrator_v1 = pickle.load(pickle_off_train_validator)
+        print("The len of the the train_generator", train_genrator_v1.__len__())
+
+        with self.output().open('w') as f:
+            f.write(self.data_text)
+
+    def output(self):
+        return luigi.LocalTarget('./Results/sample.txt')
+
+
+"""
+   Data Inference Layer: Module taking care of the data training operations of the different
+   Modules.
+"""
+
+# class ModelTrainingLogoDetection(luigi.Task):
+#     """
+#     Luigi Task to handle the Model Training of Image Detection Model workflow.
+#     """
+#     data_text_v1 = luigi.Parameter()
+#
+#     def requires(self):
+#         return [DataPreprocessingLogoDetection(data_text=self.data_text_v1)]
+#
+#     def run(self):
+#         print("Succesfully Done!!")
+#         with self.output().open('w') as out_file:
+#             out_file.write(self.data_text_v1)
+#
+#     def output(self):
+#         return luigi.LocalTarget('./Results/sample1.txt')
