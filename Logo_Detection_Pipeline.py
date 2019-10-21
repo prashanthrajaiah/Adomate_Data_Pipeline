@@ -17,6 +17,7 @@ import Modules.logo_detection.keras_retinanet.bin
 from Modules.logo_detection.keras_retinanet.preprocessing.csv_generator import CSVGenerator
 from Modules.logo_detection.keras_retinanet.utils.anchors import make_shapes_callback
 from Modules.logo_detection.keras_retinanet.utils.config import read_config_file, parse_anchor_parameters
+from Modules.logo_detection.keras_retinanet.utils.transform import random_transform_generator
 
 
 """
@@ -31,6 +32,9 @@ class DataIngestionLogoDetection(luigi.Task):
     """
     # Reading Command Line Parameters
     args_list = luigi.Parameter()
+    random_transform = luigi.Parameter()
+
+
 
     def create_generators(self, args, preprocess_image=None):
 
@@ -49,11 +53,32 @@ class DataIngestionLogoDetection(luigi.Task):
             # 'preprocess_image' : preprocess_image,
         }
 
+
+        self.random_transform = bool(self.random_transform)
+        # create random transform generator for augmenting training data
+        if self.random_transform == True:
+            print("&&&& Creating random Transform Generator &&&&&&&")
+            transform_generator = random_transform_generator(
+                min_rotation=-0.1,
+                max_rotation=0.1,
+                min_translation=(-0.1, -0.1),
+                max_translation=(0.1, 0.1),
+                min_shear=-0.1,
+                max_shear=0.1,
+                min_scaling=(0.9, 0.9),
+                max_scaling=(1.1, 1.1),
+                flip_x_chance=0.5,
+                flip_y_chance=0.5,
+            )
+        else:
+            transform_generator = random_transform_generator(flip_x_chance=0.5)
+
+
         if args.dataset_type == 'csv':
             train_generator = CSVGenerator(
                 args.annotations,
                 args.classes,
-                # transform_generator=transform_generator,
+                transform_generator = transform_generator,
                 **common_args
             )
 
@@ -125,7 +150,7 @@ class DataIngestionLogoDetection(luigi.Task):
         outFile_validation = open(target_file_path, 'wb')
         pickle.dump(self.validation_generator, outFile_validation)
         outFile = open(self.output().path, 'wb')
-        pickle.dump(self.train_generator, outFile)
+        pickle.dump(list(self.train_generator), outFile)
 
 
     def output(self):
@@ -142,23 +167,27 @@ class DataPreprocessingLogoDetection(luigi.Task):
     Luigi Task to handle the preprocessing of Image Detection Model workflow.
     """
     args_list_v1 = luigi.Parameter()
-    data_text = "This is a sample file being written"
+    random_transform_v1 = luigi.Parameter()
+    data_text = "Logo Detection Pre-processing completed!!!!"
     train_pickle_dump_path = './Results/logo_detection_train_data_generators.pickle'
     validation_pickle_dump_path = './Results/logo_detection_validation_data_generators.pickle'
 
     def requires(self):
-        return [DataIngestionLogoDetection(args_list = self.args_list_v1)]
+        return [DataIngestionLogoDetection(args_list = self.args_list_v1, random_transform = self.random_transform_v1)]
 
+    # Doesn't Serve any purpose as of now.
     def run(self):
         pickle_off_train_validator = open(self.train_pickle_dump_path,"rb")
         train_genrator_v1 = pickle.load(pickle_off_train_validator)
-        print("The len of the the train_generator", train_genrator_v1.__len__())
+
+        pickle_off_test_validator = open(self.validation_pickle_dump_path,"rb")
+        validation_genrator_v1 = pickle.load(pickle_off_test_validator)
 
         with self.output().open('w') as f:
             f.write(self.data_text)
 
     def output(self):
-        return luigi.LocalTarget('./Results/sample.txt')
+        return luigi.LocalTarget('./Results/Preprocessing_completion.txt')
 
 
 """
