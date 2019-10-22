@@ -201,6 +201,7 @@ class ModelTrainingLogoDetection(luigi.Task):
     """
     args_list_v2 = luigi.Parameter()
     random_transform_v2 = luigi.Parameter()
+
     data_text_v2 = "Model Training Phase has been Succesfully completed"
     self.args = self.parse_args(self.args_listv2)
 
@@ -306,3 +307,119 @@ class ModelTrainingLogoDetection(luigi.Task):
 
     def output(self):
         return luigi.LocalTarget('./Results/samplemodeltraining.txt')
+
+
+"""
+Model Inference Layer : Module taking care of the inference part of the logo detection module.
+"""
+
+class ModelInferenceLogoDetection(luigi.Task):
+    """
+    Luigi Task to handle inference part of the logo detection model.
+    """
+    arg_list_inference = luigi.Parameter()
+    rand_transform_inference = luigi.Parameter()
+
+    def requires(self):
+        return [ModelTrainingLogoDetection(args_list_v2=self.arg_list_inference, random_transform_v2=self.rand_transform_inference)]
+
+    # The GPU id to use, usually either "0" or "1";
+    os.environ["CUDA_VISIBLE_DEVICES"]="0";
+
+    #PASSING DEFAULT ARGUMENTS
+    def parse_args(args):
+        # construct the argument parse and parse the arguments
+        ap = argparse.ArgumentParser()
+        ap.add_argument("-i", "--image", required=True,help="path to input image")
+        return ap.parse_args(args)
+
+    def process(img):
+        # load the input image (in BGR order), clone it, and preprocess it
+        image = read_image_bgr(img)
+        output_image = image.copy()
+        image = preprocess_image(image)
+        (image, scale) = resize_image(image)
+        image = np.expand_dims(image, axis=0)
+
+        # detect objects in the input image and correct for the image scale
+        (boxes, scores, labels) = model.predict_on_batch(image)
+        boxes /= scale
+        boxes=boxes.astype('int')
+
+        #Creatung the Logo dataframe from the model and retaining rows where confidence is high
+        Logo=pd.DataFrame(zip(boxes[0], scores[0], labels[0]),columns=['bbox','conf','label'])
+        Logo=Logo[Logo['conf'] >.50]
+        Logo['label']=Logo['label'].apply(lambda x:LABELS[x])
+
+        return Logo,output_image
+
+    def op(ocr,Logo):
+        #Iou over Logo and cor and creating final results dataframe
+        if ocr is not None :
+
+            output=pd.DataFrame(columns=['bbox', 'conf', 'label', 'bbox_ocr', 'conf_ocr', 'text','class'])
+            inter=0
+
+            for index,logo_row in Logo.iterrows():
+
+                for i,ocr_row in ocr.iterrows():
+
+                    iou =bb_intersection_over_union(logo_row['bbox'],ocr_row['bbox_ocr'])
+
+                    if iou > .60:
+                        inter +=1
+                        #If ocr['text'] in Logo['label']and also if mention present in Logo['label']
+                        if re.search(ocr_row['text'], logo_row['label'], re.IGNORECASE) and "Mention" in logo_row['label']:
+
+                            prob =0.2 * logo_row['conf'] + 0.8 * ocr_row['conf_ocr']/100
+                            output =output.append(logo_row.to_frame().T.reset_index(drop=True).join(ocr_row.to_frame().T.reset_index(drop=True)),ignore_index=True,sort=False)
+                            output.loc[output.index[-1],'class']=logo_row['label']
+                            output.loc[output.index[-1],'prob'] = prob
+                        else:
+                            #Creating a prob based on both logo and ocr and giving a weihted prob and both the labels
+                            prob =0.8 * logo_row['conf'] + 0.2 * ocr_row['conf_ocr']/100
+                            output =output.append(logo_row.to_frame().T.reset_index(drop=True).join(ocr_row.to_frame().T.reset_index(drop=True)),ignore_index=True,sort=False)
+                            output.loc[output.index[-1],'class']=logo_row['label'] + '/' + ocr_row['text']+ '_' +'Mention'
+                            output.loc[output.index[-1],'prob'] = prob
+
+                if inter >0:
+                    #If intersections detected
+                    result=pd.concat([output,Logo],ignore_index=True,sort=False)
+                    try:
+                        result=result[~result['bbox'].duplicated()]
+                    except:
+                        pass
+                    result.loc[result['class'].isnull(),'class'] = result['label']
+                    result.loc[result['prob'].isnull(),'prob'] = result['conf']
+                else :
+                    #if no intersections appned the Logo and ocr
+                    ocr.columns=Logo.columns
+                    result =Logo.append(ocr)
+                    result.columns = ['bbox','prob','class']
+        else :
+            #if no ocr just use the LOGO
+            result =Logo.copy()
+            result.columns = ['bbox','prob','class']
+
+        return result
+
+
+    def run(luigi.Task):
+        model = '../../inference_models/inference_micro_intell_add.h5'
+        labels = '../../Data/Microsoft_Data/retinanet_classes_add.csv'
+        confidence = 0.55
+        # load the class label mappings
+        LABELS = open(labels).read().strip().split("\n")
+        LABELS = {int(L.split(",")[1]): L.split(",")[0] for L in LABELS}
+
+        # load the model from disk
+        model = models.load_model(model, backbone_name="resnet50")
+        args=parse_args(args)
+        print('y')
+        ocr = get_ocr(args.image)
+        Logo,output_image=process(args.image)
+        result=op(ocr,Logo)
+        print(result)
+
+    def complete(self):
+        print("******* The data pipelining has been successfully completed")
