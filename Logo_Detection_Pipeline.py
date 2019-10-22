@@ -18,6 +18,7 @@ from Modules.logo_detection.keras_retinanet.preprocessing.csv_generator import C
 from Modules.logo_detection.keras_retinanet.utils.anchors import make_shapes_callback
 from Modules.logo_detection.keras_retinanet.utils.config import read_config_file, parse_anchor_parameters
 from Modules.logo_detection.keras_retinanet.utils.transform import random_transform_generator
+from Modules.logo_detection.keras_retinanet.utils.keras_version import check_keras_version
 
 
 """
@@ -56,29 +57,29 @@ class DataIngestionLogoDetection(luigi.Task):
 
         self.random_transform = bool(self.random_transform)
         # create random transform generator for augmenting training data
-        if self.random_transform == True:
-            print("&&&& Creating random Transform Generator &&&&&&&")
-            transform_generator = random_transform_generator(
-                min_rotation=-0.1,
-                max_rotation=0.1,
-                min_translation=(-0.1, -0.1),
-                max_translation=(0.1, 0.1),
-                min_shear=-0.1,
-                max_shear=0.1,
-                min_scaling=(0.9, 0.9),
-                max_scaling=(1.1, 1.1),
-                flip_x_chance=0.5,
-                flip_y_chance=0.5,
-            )
-        else:
-            transform_generator = random_transform_generator(flip_x_chance=0.5)
+        # if self.random_transform == True:
+        #     print("&&&& Creating random Transform Generator &&&&&&&")
+        #     transform_generator = random_transform_generator(
+        #         min_rotation=-0.1,
+        #         max_rotation=0.1,
+        #         min_translation=(-0.1, -0.1),
+        #         max_translation=(0.1, 0.1),
+        #         min_shear=-0.1,
+        #         max_shear=0.1,
+        #         min_scaling=(0.9, 0.9),
+        #         max_scaling=(1.1, 1.1),
+        #         flip_x_chance=0.5,
+        #         flip_y_chance=0.5,
+        #     )
+        # else:
+        #     transform_generator = random_transform_generator(flip_x_chance=0.5)
 
 
         if args.dataset_type == 'csv':
             train_generator = CSVGenerator(
                 args.annotations,
                 args.classes,
-                transform_generator = transform_generator,
+                #transform_generator = transform_generator,
                 **common_args
             )
 
@@ -191,23 +192,117 @@ class DataPreprocessingLogoDetection(luigi.Task):
 
 
 """
-   Data Inference Layer: Module taking care of the data training operations of the different
-   Modules.
+   Model Training Layer: Module taking care of the data training operations of the Logo detection module.
 """
 
-# class ModelTrainingLogoDetection(luigi.Task):
-#     """
-#     Luigi Task to handle the Model Training of Image Detection Model workflow.
-#     """
-#     data_text_v1 = luigi.Parameter()
-#
-#     def requires(self):
-#         return [DataPreprocessingLogoDetection(data_text=self.data_text_v1)]
-#
-#     def run(self):
-#         print("Succesfully Done!!")
-#         with self.output().open('w') as out_file:
-#             out_file.write(self.data_text_v1)
-#
-#     def output(self):
-#         return luigi.LocalTarget('./Results/sample1.txt')
+class ModelTrainingLogoDetection(luigi.Task):
+    """
+    Luigi Task to handle the Model Training of Image Detection Model workflow.
+    """
+    args_list_v2 = luigi.Parameter()
+    random_transform_v2 = luigi.Parameter()
+    data_text_v2 = "Model Training Phase has been Succesfully completed"
+    self.args = self.parse_args(self.args_listv2)
+
+    def requires(self):
+        return [DataPreprocessingLogoDetection(args_list_v1=self.data_text_v2, random_transform_v1=self.random_transform_v2)]
+
+    def run(self):
+        # create object that stores backbone information
+        backbone = models.backbone(args.backbone)
+        self.args_listv3 = self.args_list_v2.strip('][')
+        self.args_listv4 = self.args_listv3.split(',')
+        self.args = self.parse_args(self.args_listv4)
+        backbone = models.backbone(self.args.backbone)
+
+        #Making sure that the keras is of required minimum versionself
+        check_keras_version()
+
+        # Setting up session for GPU
+        def get_session():
+            """ Construct a modified tf session.
+            """
+            config = tf.ConfigProto()
+            config.gpu_options.allow_growth = True
+            return tf.Session(config=config)
+
+        # optionally choose specific GPU
+        if self.args.gpu:
+            os.environ['CUDA_VISIBLE_DEVICES'] = self.args.gpu
+        keras.backend.tensorflow_backend.set_session(get_session())
+
+
+        # create the model
+        if args.snapshot is not None:
+            print('Loading model, this may take a second...')
+            model            = models.load_model(args.snapshot, backbone_name=args.backbone)
+            training_model   = model
+            anchor_params    = None
+            if args.config and 'anchor_parameters' in args.config:
+                anchor_params = parse_anchor_parameters(args.config)
+            prediction_model = retinanet_bbox(model=model, anchor_params=anchor_params)
+        else:
+            weights = args.weights
+            # default to imagenet if nothing else is specified
+            if weights is None and args.imagenet_weights:
+                weights = backbone.download_imagenet()
+
+            print('Creating model, this may take a second...')
+            model, training_model, prediction_model = create_models(
+                backbone_retinanet=backbone.retinanet,
+                num_classes=train_generator.num_classes(),
+                weights=weights,
+                multi_gpu=args.multi_gpu,
+                freeze_backbone=args.freeze_backbone,
+                lr=args.lr,
+                config=args.config
+            )
+
+        # this lets the generator compute backbone layer shapes using the actual backbone model
+        if 'vgg' in args.backbone or 'densenet' in args.backbone:
+            train_generator.compute_shapes = make_shapes_callback(model)
+            if validation_generator:
+                validation_generator.compute_shapes = train_generator.compute_shapes
+
+        csv_log = CSVLogger("training_coco_weights.log", separator=',', append= True)
+
+        # create the callbacks
+        callbacks = create_callbacks(
+            model,
+            training_model,
+            prediction_model,
+            validation_generator,
+            csv_log,
+            args
+        )
+
+        # Use multiprocessing if workers > 0
+        if args.workers > 0:
+            use_multiprocessing = True
+        else:
+            use_multiprocessing = False
+
+        if not args.compute_val_loss:
+            validation_generator = None
+
+
+        # start training
+        print("Started Training !!!!")
+        return training_model.fit_generator(
+            generator=train_generator,
+            steps_per_epoch=args.steps,
+            epochs=args.epochs,
+            verbose=1,
+            callbacks=callbacks,
+            workers=args.workers,
+            use_multiprocessing=use_multiprocessing,
+            max_queue_size=args.max_queue_size,
+            validation_data=validation_generator
+        )
+
+        print("Succesfully Done!!")
+        with self.output().open('w') as out_file:
+            out_file.write(self.data_text_v2)
+
+    def output(self):
+        return luigi.LocalTarget('./Results/samplemodeltraining.txt')
